@@ -12,6 +12,84 @@ from reportlab.lib.units import inch
 import matplotlib.ticker as mtick
 import PyPDF2
 
+def _normalize_rates_df(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Make the rates CSV forgiving:
+    - trims and lowercases headers
+    - maps common header variants -> required names
+    - coerces numeric fields
+    - fills any missing required columns with defaults
+    Required columns:
+      modality_key, description, apc_example, medicare_rate_usd,
+      commercial_multiplier, medicaid_multiplier, pct_with_contrast, pro_share
+    """
+    req_cols = ["modality_key","description","apc_example","medicare_rate_usd",
+                "commercial_multiplier","medicaid_multiplier","pct_with_contrast","pro_share"]
+
+    # Header normalize
+    df = df_raw.copy()
+    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+
+    # Common aliases
+    aliases = {
+        "modality": "modality_key",
+        "modalityname": "modality_key",
+        "modality_key": "modality_key",
+        "desc": "description",
+        "apc": "apc_example",
+        "apc_levels": "apc_example",
+        "medicare": "medicare_rate_usd",
+        "medicare_rate": "medicare_rate_usd",
+        "medicare_rate_$": "medicare_rate_usd",
+        "medicare_rate_usd": "medicare_rate_usd",
+        "commercial_mult": "commercial_multiplier",
+        "commercial_multiplier": "commercial_multiplier",
+        "comm_multiplier": "commercial_multiplier",
+        "comm_mult": "commercial_multiplier",
+        "medicaid_mult": "medicaid_multiplier",
+        "medicaid_multiplier": "medicaid_multiplier",
+        "pct_contrast": "pct_with_contrast",
+        "percent_with_contrast": "pct_with_contrast",
+        "with_contrast_pct": "pct_with_contrast",
+        "pct_with_contrast": "pct_with_contrast",
+        "professional_share": "pro_share",
+        "proportion_professional": "pro_share",
+        "pro_pct": "pro_share",
+        "pro_share": "pro_share",
+    }
+
+    # Map aliases
+    mapped = {}
+    for c in df.columns:
+        key = aliases.get(c, c)
+        mapped[key] = df[c]
+    df = pd.DataFrame(mapped)
+
+    # Ensure required columns exist
+    for col in req_cols:
+        if col not in df.columns:
+            if col in ["description","apc_example"]:
+                df[col] = ""
+            elif col == "modality_key":
+                # try to derive from description if present
+                if "description" in df.columns:
+                    df[col] = df["description"].str.lower().str.extract(r"(x[- ]?ray|ct.*no|ct.*with|mri.*no|mri.*with|ultra|pet)", expand=False).fillna("")
+                else:
+                    df[col] = ""
+            elif col in ["pct_with_contrast","pro_share"]:
+                df[col] = 0.0
+            else:
+                df[col] = 0.0
+
+    # Coerce numeric
+    for col in ["medicare_rate_usd","commercial_multiplier","medicaid_multiplier","pct_with_contrast","pro_share"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    # Keep only required columns (ordered)
+    df = df[req_cols]
+
+    return df
+
 st.set_page_config(page_title="Radiology Locums ROI", layout="wide")
 
 # ---------------------
@@ -161,7 +239,28 @@ if page == "Inputs":
 if page == "Rates":
     st.header("Rates — allowed amounts and pro share")
     st.write("Upload a CSV (or edit inline). We’ll blend with payer mix and contrast % for CT/MRI.")
-    rates_upload = st.file_uploader("Upload rates CSV", type=["csv"], key="rates_upload_page")
+    
+rates_upload = st.file_uploader("Upload rates CSV", type=["csv"], key="rates_upload_page")
+df = None
+if rates_upload is not None:
+    df = _normalize_rates_df(pd.read_csv(rates_upload))
+elif "rates_csv" in st.session_state["uploaded"]:
+    try:
+        df = _normalize_rates_df(pd.read_csv(st.session_state["uploaded"]["rates_csv"]))
+    except Exception:
+        df = None
+if df is None:
+    df = pd.DataFrame({
+        "modality_key": ["xray","ct_nocon","ct_con","mri_nocon","mri_con","ultrasound","pet"],
+        "description": ["X-Ray","CT (no contrast)","CT (with contrast)","MRI (no contrast)","MRI (with contrast)","Ultrasound","PET"],
+        "apc_example": ["5521-5524","5521-5524","5571-5573","5523-5524","5571-5573","Various","Cardiac PET APC"],
+        "medicare_rate_usd": [88, 250, 550, 450, 790, 220, 1950],
+        "commercial_multiplier": [2.0]*7,
+        "medicaid_multiplier": [0.8]*7,
+        "pct_with_contrast": [0.0,0.20,0.80,0.15,0.85,0.0,1.0],
+        "pro_share": [0.2,0.2,0.2,0.25,0.25,0.2,0.25],
+    })
+
     if rates_upload:
         df = pd.read_csv(rates_upload)
     else:
