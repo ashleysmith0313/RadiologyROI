@@ -1,0 +1,8 @@
+modality_key,description,apc_example,medicare_rate_usd,commercial_multiplier,medicaid_multiplier,pct_with_contrast,pro_share
+xray,X-Ray,5521-5524,88,2.0,0.8,0.0,0.2
+ct_nocon,CT (no contrast),5521-5524,250,2.0,0.8,0.2,0.2
+ct_con,CT (with contrast),5571-5573,550,2.0,0.8,0.8,0.2
+mri_nocon,MRI (no contrast),5523-5524,450,2.0,0.8,0.15,0.25
+mri_con,MRI (with contrast),5571-5573,790,2.0,0.8,0.85,0.25
+ultrasound,Ultrasound,Various,220,2.0,0.8,0.0,0.2
+pet,PET,Cardiac PET APC,1950,1.9,0.8,1.0,0.25
