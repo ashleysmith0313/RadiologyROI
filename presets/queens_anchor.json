@@ -1,0 +1,106 @@
+{
+  "name": "Queens (anchors + HI payer mix)",
+  "volume": {
+    "ed_visits": 62000,
+    "util_xray": 48.0,
+    "util_ct": 29.0,
+    "util_us": 10.0,
+    "util_mri": 2.5,
+    "util_pet": 0.2,
+    "mult_xray": 1.8,
+    "mult_ct": 2.2,
+    "mult_us": 2.0,
+    "mult_mri": 2.5,
+    "mult_pet": 1.6
+  },
+  "finance": {
+    "capture_wo": 70,
+    "hospital_captures": "Technical only",
+    "bad_debt": 5
+  },
+  "payer": {
+    "commercial": 71,
+    "medicaid": 16
+  },
+  "locums": {
+    "total_cost": 6000000.0,
+    "reads_per_day": 70.0,
+    "fte_days": 2000.0
+  },
+  "rates": {
+    "table": {
+      "modality_key": [
+        "xray",
+        "ct_nocon",
+        "ct_con",
+        "mri_nocon",
+        "mri_con",
+        "ultrasound",
+        "pet"
+      ],
+      "description": [
+        "X-Ray",
+        "CT (no contrast)",
+        "CT (with contrast)",
+        "MRI (no contrast)",
+        "MRI (with contrast)",
+        "Ultrasound",
+        "PET"
+      ],
+      "apc_example": [
+        "5521-5524",
+        "5521-5524",
+        "5571-5573",
+        "5523-5524",
+        "5571-5573",
+        "Various",
+        "Cardiac PET APC"
+      ],
+      "medicare_rate_usd": [
+        88,
+        250,
+        550,
+        450,
+        790,
+        220,
+        1950
+      ],
+      "commercial_multiplier": [
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        1.9
+      ],
+      "medicaid_multiplier": [
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8
+      ],
+      "pct_with_contrast": [
+        0.0,
+        0.2,
+        0.8,
+        0.15,
+        0.85,
+        0.0,
+        1.0
+      ],
+      "pro_share": [
+        0.2,
+        0.2,
+        0.2,
+        0.25,
+        0.25,
+        0.2,
+        0.25
+      ]
+    }
+  }
+}
