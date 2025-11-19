@@ -1,5 +1,5 @@
 {
-  "name": "Baseline (placeholders)",
+  "name": "High Medicaid (placeholders)",
   "volume": {
     "ed_visits": 62000,
     "util_xray": 48,
@@ -19,8 +19,8 @@
     "bad_debt": 5
   },
   "payer": {
-    "commercial": 71,
-    "medicaid": 15
+    "commercial": 55,
+    "medicaid": 30
   },
   "locums": {
     "total_cost": 6000000.0,
