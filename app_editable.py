@@ -9,6 +9,7 @@ import json
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
 import matplotlib.ticker as mtick
 import PyPDF2
 
@@ -411,9 +412,101 @@ if page == "Export":
         R = st.session_state["rates"]
         # We won't regenerate charts here; just create a simple one-page PDF like before
         from reportlab.pdfgen import canvas
+        
+        # --- Build full PDF with KPIs, breakdown, and embedded waterfall chart ---
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.units import inch
+        from reportlab.lib.utils import ImageReader
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as mtick
+        import io
+
+        # Recompute values for safety in Export page
+        payer_mix = {
+            "commercial": I["pay_comm"]/100.0,
+            "medicaid": I["pay_mcaid"]/100.0,
+            "medicare": I["pay_mcare"]/100.0,
+        }
+
+        rates = R.copy()
+        def _blend(row):
+            base = row.get("medicare_rate_usd", 0.0)
+            return (
+                payer_mix["commercial"] * (base*row.get("commercial_multiplier",1.0)) +
+                payer_mix["medicaid"] * (base*row.get("medicaid_multiplier",1.0)) +
+                payer_mix["medicare"] * base
+            )
+        rates["avg_allowed"] = rates.apply(_blend, axis=1)
+
+        def _mod_rate(mkey):
+            import numpy as np
+            if mkey in ["ct","mri"]:
+                no_key = f"{mkey}_nocon"; con_key = f"{mkey}_con"
+                no_rate = rates.loc[rates["modality_key"]==no_key,"avg_allowed"].values[0]
+                con_rate = rates.loc[rates["modality_key"]==con_key,"avg_allowed"].values[0]
+                pct_con = rates.loc[rates["modality_key"]==con_key,"pct_with_contrast"].values[0]
+                return (1-pct_con)*no_rate + pct_con*con_rate
+            return rates.loc[rates["modality_key"]==mkey,"avg_allowed"].values[0]
+
+        rt_x = _mod_rate("xray"); rt_ct = _mod_rate("ct"); rt_us = _mod_rate("ultrasound"); rt_mri = _mod_rate("mri"); rt_pet = _mod_rate("pet")
+        if I["hospital_captures"] == "Technical only":
+            def _pro(k):
+                v = rates.loc[rates["modality_key"]==k,"pro_share"]
+                return float(v.values[0]) if len(v)>0 else 0.0
+            factors = [1-_pro("xray"), 1-_pro("ct_con"), 1-_pro("mri_con"), 1-_pro("ultrasound"), 1-_pro("pet")]
+            rt_x *= factors[0]; rt_ct *= factors[1]; rt_mri *= factors[2]; rt_us *= factors[3]; rt_pet *= factors[4]
+
+        ed_factor = I["ed_visits"]/100.0
+        ed_x = I["x_per100"]*ed_factor; ed_ct = I["ct_per100"]*ed_factor
+        ed_us = I["us_per100"]*ed_factor; ed_mri = I["mri_per100"]*ed_factor; ed_pet = I["pet_per100"]*ed_factor
+        v_x = ed_x*I["mult_x"]; v_ct = ed_ct*I["mult_ct"]; v_us = ed_us*I["mult_us"]; v_mri = ed_mri*I["mult_mri"]; v_pet = ed_pet*I["mult_pet"]
+
+        total = v_x+v_ct+v_us+v_mri+v_pet
+        wo = total*(I["capture_wo"]/100.0)
+        inc_raw = total-wo
+        capacity = I["reads_day"]*I["fte_days"]
+        scale = min(1.0, capacity/inc_raw) if inc_raw>0 else 0.0
+        inc_reads = inc_raw if scale==1.0 else capacity
+
+        gross_rev = v_x*rt_x + v_ct*rt_ct + v_us*rt_us + v_mri*rt_mri + v_pet*rt_pet
+        inc_rev = gross_rev*(1-I["capture_wo"]/100.0)*scale
+        net_inc_rev = inc_rev*(1-I["bad_debt"]/100.0)
+        net_gain = net_inc_rev - I["locum_cost"]
+
+        # Build waterfall figure as image
+        gross_before_bd = inc_rev / (1 - I["bad_debt"]/100.0) if (1 - I["bad_debt"]/100.0) > 0 else 0
+        steps = [gross_before_bd, -(gross_before_bd - inc_rev), -I["locum_cost"]]
+        labels = ["Gross incremental revenue", "Bad debt/denials", "Locums cost"]
+
+        cum = [0]
+        for v in steps: cum.append(cum[-1]+v)
+
+        fig = plt.figure(figsize=(8,4.5)); ax = plt.gca()
+        for i, v in enumerate(steps):
+            ax.bar(i, v, bottom=cum[i] if v>=0 else cum[i]+v)
+        ax.bar(len(steps), net_gain, bottom=0)
+        ax.set_xticks(range(len(steps)+1)); ax.set_xticklabels(labels + ["Net gain"], rotation=20, ha='right')
+        ax.yaxis.set_major_formatter(mtick.StrMethodFormatter('${x:,.0f}'))
+        ax.grid(axis='y', linestyle='--', alpha=0.6)
+        def _lab(x, h, b): ax.text(x, b+(h if h>=0 else 0), f"{h:,.0f}", ha='center', va='bottom', fontsize=9)
+        for i, v in enumerate(steps): _lab(i, v, cum[i] if v>=0 else cum[i]+v)
+        _lab(len(steps), net_gain, 0)
+        ax.set_ylabel("USD"); plt.tight_layout()
+
+        img_buf = io.BytesIO()
+        fig.savefig(img_buf, format="png", dpi=180, bbox_inches="tight")
+        plt.close(fig); img_buf.seek(0)
+        img = ImageReader(img_buf)
+
+        # Compose PDF
         pdf = BytesIO()
-        c = canvas.Canvas(pdf, pagesize=letter); width, height = letter; y = height - 1*inch
+        c = canvas.Canvas(pdf, pagesize=letter); width, height = letter
+        y = height - 1*inch
         c.setFont("Helvetica-Bold", 16); c.drawString(1*inch, y, "Radiology Locums ROI — Summary"); y -= 0.3*inch
+
+        # KPIs
+        c.setFont("Helvetica-Bold", 12); c.drawString(1*inch, y, "Key Inputs"); y -= 0.2*inch
         c.setFont("Helvetica", 10)
         for line in [
             f"ED visits: {I['ed_visits']:,} | Capture without locums: {I['capture_wo']}% | Bad debt: {I['bad_debt']}%",
@@ -421,9 +514,30 @@ if page == "Export":
             f"Locums: ${I['locum_cost']:,.0f} spend, {I['fte_days']:,.0f} FTE-days @ {I['reads_day']:,.0f} reads/day"
         ]:
             c.drawString(1*inch, y, line); y -= 0.18*inch
-        c.setFont("Helvetica-Oblique", 8); y -= 0.2*inch
-        c.drawString(1*inch, y, "All inputs editable; figures illustrative."); c.showPage(); c.save(); pdf.seek(0)
+
+        # Breakdown numbers
+        y -= 0.05*inch
+        c.setFont("Helvetica-Bold", 12); c.drawString(1*inch, y, "Breakdown"); y -= 0.2*inch
+        c.setFont("Helvetica", 10)
+        c.drawString(1*inch, y, f"Gross incremental revenue: ${gross_before_bd:,.0f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"Bad debt/denials: -${(gross_before_bd - inc_rev):,.0f}"); y -= 0.18*inch
+        c.drawString(1*inch, y, f"Locums cost: -${I['locum_cost']:,.0f}"); y -= 0.18*inch
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(1*inch, y, f"Net gain: ${net_gain:,.0f}"); y -= 0.18*inch
+
+        # Insert waterfall image
+        y -= 0.1*inch
+        img_w = 6.0*inch; img_h = 3.3*inch
+        c.drawImage(img, 1*inch, max(0.8*inch, y-img_h), width=img_w, height=img_h, preserveAspectRatio=True, mask='auto')
+        y = max(0.8*inch, y-img_h) - 0.1*inch
+
+        # Footer
+        c.setFont("Helvetica-Oblique", 8)
+        c.drawString(1*inch, 0.6*inch, "All inputs are user-editable; figures are illustrative.")
+        c.showPage(); c.save(); pdf.seek(0)
+
         st.download_button("Download PDF summary", data=pdf.getvalue(), file_name="radiology_locums_roi_summary.pdf", mime="application/pdf")
+st.download_button("Download PDF summary", data=pdf.getvalue(), file_name="radiology_locums_roi_summary.pdf", mime="application/pdf")
 
         json_bytes = json.dumps({"inputs": I, "rates": R.to_dict(orient="list")}, indent=2).encode("utf-8")
         st.download_button("Download JSON scenario", data=json_bytes, file_name="radiology_locums_roi_scenario.json", mime="application/json")
