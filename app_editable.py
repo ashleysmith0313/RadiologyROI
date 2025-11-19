@@ -9,6 +9,7 @@ import json
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
+import matplotlib.ticker as mtick
 
 st.set_page_config(page_title="Radiology Locums ROI (Editable)", layout="wide")
 
@@ -20,9 +21,6 @@ if logo_path.exists():
 st.title("Radiology Locums ROI — Logic-First, Fully Editable")
 st.caption("Everything is editable. Use presets, upload a JSON to prefill, or edit assumptions live.")
 
-# ----------------------
-# Helper functions
-# ----------------------
 def init_default_rates():
     return pd.DataFrame({
         "modality_key": ["xray","ct_nocon","ct_con","mri_nocon","mri_con","ultrasound","pet"],
@@ -69,25 +67,21 @@ def safe_num(x, default=0.0):
     except Exception:
         return default
 
-# ----------------------
-# Sidebar: Presets + Config
-# ----------------------
+# Presets/config
 st.sidebar.header("Start here")
 preset_choice = st.sidebar.selectbox("Load a preset", ["None", "Baseline (placeholders)", "High Medicaid (placeholders)"])
+preset_map = {}
+if Path("presets/baseline.json").exists():
+    preset_map["Baseline (placeholders)"] = json.loads(Path("presets/baseline.json").read_text())
+if Path("presets/high_medicaid.json").exists():
+    preset_map["High Medicaid (placeholders)"] = json.loads(Path("presets/high_medicaid.json").read_text())
 
-# Internal preset data (kept minimal; numbers are placeholders)
-preset_map = {
-    "Baseline (placeholders)": json.loads(Path("presets/baseline.json").read_text()) if Path("presets/baseline.json").exists() else {},
-    "High Medicaid (placeholders)": json.loads(Path("presets/high_medicaid.json").read_text()) if Path("presets/high_medicaid.json").exists() else {},
-}
-
-if preset_choice != "None" and preset_choice in preset_map and preset_map[preset_choice]:
+if preset_choice != "None" and preset_choice in preset_map:
     st.session_state["cfg"] = preset_map[preset_choice]
 elif "cfg" not in st.session_state:
     st.session_state["cfg"] = {}
 
 cfg = st.session_state["cfg"]
-
 uploaded_config = st.sidebar.file_uploader("Or load JSON config", type=["json"])
 if uploaded_config is not None:
     try:
@@ -105,9 +99,6 @@ def cfg_get(path, default):
             return default
     return node if node != {} else default
 
-# ----------------------
-# Inputs (all editable)
-# ----------------------
 with st.sidebar:
     st.header("Volume drivers")
     ed_visits = st.number_input("Annual ED visits", value=int(cfg_get("volume.ed_visits", 62000)), min_value=0, step=100)
@@ -140,7 +131,6 @@ with st.sidebar:
     reads_per_locum_day = st.number_input("Reads per locum FTE-day", value=safe_num(cfg_get("locums.reads_per_day", 70.0)), step=1.0, min_value=0.0)
     locum_fte_days = st.number_input("Total locum FTE-days (period)", value=safe_num(cfg_get("locums.fte_days", 2000.0)), step=10.0, min_value=0.0)
 
-# Rates editor
 st.subheader("Rate table (fully editable)")
 if "rates_df" not in st.session_state:
     rates_cfg = cfg_get("rates.table", None)
@@ -247,17 +237,49 @@ with c3:
     st.metric("Benefit-cost (x)", f"{roi_multiple:,.2f}" if not np.isnan(roi_multiple) else "—")
 st.caption(capacity_note)
 
-# Waterfall
+# ----------------------
+# Improved Waterfall
+# ----------------------
 st.subheader("Waterfall")
 gross_before_bd = incremental_rev / (1 - bad_debt/100.0) if (1 - bad_debt/100.0)>0 else 0
-wf_values = [gross_before_bd, -(gross_before_bd - incremental_rev), -locum_total_cost, net_gain]
-wf_labels = ["Gross incremental revenue", "Bad debt/denials", "Locums cost", "Net gain"]
+steps = [gross_before_bd, -(gross_before_bd - incremental_rev), -locum_total_cost]
+labels = ["Gross incremental revenue", "Bad debt/denials", "Locums cost"]
+final_label = "Net gain"
+final_value = net_gain
 
-fig = plt.figure()
-plt.bar([0,1,2], wf_values[:3])
-plt.bar([3], wf_values[3])
-plt.xticks(range(4), wf_labels, rotation=20, ha='right')
-plt.ylabel("USD")
+cum = [0]
+for v in steps:
+    cum.append(cum[-1] + v)
+
+fig = plt.figure(figsize=(9,5))
+ax = plt.gca()
+
+for i, v in enumerate(steps):
+    if v >= 0:
+        ax.bar(i, v, bottom=cum[i])
+    else:
+        ax.bar(i, v, bottom=cum[i] + v)
+
+ax.bar(len(steps), final_value, bottom=0)
+
+ax.set_xticks(range(len(steps)+1))
+ax.set_xticklabels(labels + [final_label], rotation=20, ha='right')
+
+ax.yaxis.set_major_formatter(mtick.StrMethodFormatter('${x:,.0f}'))
+ax.grid(axis='y', linestyle='--', alpha=0.6)
+
+def add_label(x, height, y_base):
+    ypos = y_base + (height if height>=0 else 0)
+    ax.text(x, ypos, f"{height:,.0f}", ha='center', va='bottom', fontsize=9)
+
+for i, v in enumerate(steps):
+    y_base = cum[i] if v>=0 else cum[i] + v
+    add_label(i, v, y_base)
+
+add_label(len(steps), final_value, 0)
+
+ax.set_ylabel("USD")
+plt.tight_layout()
 st.pyplot(fig)
 
 # Detail table
@@ -272,9 +294,7 @@ detail_df = pd.DataFrame({
 }).round(2)
 st.dataframe(detail_df, use_container_width=True)
 
-# ----------------------
-# Save/Load everything as JSON
-# ----------------------
+# Save/Load JSON
 st.divider()
 st.subheader("Save/Load everything as JSON")
 save_dict = {
@@ -312,9 +332,7 @@ save_dict = {
 json_bytes = json.dumps(save_dict, indent=2).encode("utf-8")
 st.download_button("Download JSON config", data=json_bytes, file_name="radiology_roi_config.json", mime="application/json")
 
-# ----------------------
-# Make a simple one-page PDF summary
-# ----------------------
+# PDF summary
 st.divider()
 st.subheader("Create a one-page PDF summary")
 if st.button("Generate PDF"):
@@ -323,23 +341,18 @@ if st.button("Generate PDF"):
     width, height = letter
     y = height - 1*inch
 
-    # Title
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(1*inch, y, "Radiology Locums ROI — Summary")
-    y -= 0.3*inch
-
-    # Key inputs
+    c.drawString(1*inch, y, "Radiology Locums ROI — Summary"); y -= 0.3*inch
     c.setFont("Helvetica-Bold", 12); c.drawString(1*inch, y, "Key Inputs"); y -= 0.2*inch
     c.setFont("Helvetica", 10)
     lines = [
         f"ED visits: {ed_visits:,}  |  Capture without locums: {capture_wo}%  |  Bad debt: {bad_debt}%",
-        f"Payer mix: Comm {pay_commercial}%, Medicaid {pay_medicaid}%, Medicare {int(100-pay_commercial-pay_medicaid)}%",
+        f"Payer mix: Comm {int(100* payer_mix['commercial'])}%, Medicaid {int(100* payer_mix['medicaid'])}%, Medicare {int(100* payer_mix['medicare'])}%",
         f"Locums: ${locum_total_cost:,.0f} spend, {locum_fte_days:,.0f} FTE-days @ {reads_per_locum_day:,.0f} reads/day"
     ]
     for line in lines:
         c.drawString(1*inch, y, line); y -= 0.18*inch
 
-    # Results
     y -= 0.1*inch
     c.setFont("Helvetica-Bold", 12); c.drawString(1*inch, y, "Results"); y -= 0.2*inch
     c.setFont("Helvetica", 10)
@@ -349,17 +362,10 @@ if st.button("Generate PDF"):
         c.drawString(1*inch, y, f"Benefit-cost (x): {roi_multiple:.2f}"); y -= 0.18*inch
     c.drawString(1*inch, y, f"Net gain: ${net_gain:,.0f}"); y -= 0.18*inch
 
-    # Footer
     y -= 0.2*inch
     c.setFont("Helvetica-Oblique", 8)
     c.drawString(1*inch, y, "Note: All inputs are user-editable; this summary is illustrative only.")
     c.showPage()
     c.save()
     pdf_buffer.seek(0)
-
-    st.download_button(
-        "Download PDF summary",
-        data=pdf_buffer.getvalue(),
-        file_name="radiology_locums_roi_summary.pdf",
-        mime="application/pdf"
-    )
+    st.download_button("Download PDF summary", data=pdf_buffer.getvalue(), file_name="radiology_locums_roi_summary.pdf", mime="application/pdf")
